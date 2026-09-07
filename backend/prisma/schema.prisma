@@ -1,0 +1,370 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  COMPANY_ADMIN
+  DIRECTOR
+  CHIEF_ACCOUNTANT
+  ACCOUNTANT
+  OPERATOR
+  AUDITOR
+}
+
+enum DocumentType {
+  FACTURA
+  ACT
+  WAYBILL
+  CONTRACT
+  POWER_OF_ATTORNEY
+}
+
+enum DocumentStatus {
+  DRAFT
+  CHECKED
+  SIGN_PENDING
+  SIGNED_LOCAL
+  SENDING
+  SENT
+  ACCEPTED
+  REJECTED
+  CANCELLED
+}
+
+enum IntegrationProvider {
+  DIDOX
+  SOLIQ
+  HAMKORBANK
+  KAPITALBANK
+}
+
+model User {
+  id                 String          @id @default(uuid())
+  phone              String          @unique
+  passwordHash       String
+  fullName           String
+  email              String?         @unique
+  isActive           Boolean         @default(true)
+  isSuperAdmin       Boolean         @default(false)
+  twoFactorEnabled   Boolean         @default(false)
+  twoFactorSecret    String?
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  companyUsers       CompanyUser[]
+  eriCertificates    EriCertificate[]
+  signatures         Signature[]
+  createdDocuments   Document[]      @relation("DocumentCreator")
+  auditLogs          AuditLog[]
+  journalEntries     JournalEntry[]
+
+  @@map("users")
+}
+
+model Company {
+  id                 String          @id @default(uuid())
+  tin                String          @unique // STIR
+  pinfl              String?         // JShShIR
+  name               String
+  shortName          String?
+  directorName       String?
+  address            String?
+  phone              String?
+  email              String?
+  bankAccount        String?
+  bankMfo            String?
+  bankName           String?
+  vatPayer           Boolean         @default(false)
+  vatNumber          String?
+  businessType       String?         @default("MCHJ")
+  status             String          @default("ACTIVE")
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  companyUsers       CompanyUser[]
+  eriCertificates    EriCertificate[]
+  counterparties     Counterparty[]
+  contracts          Contract[]
+  products           Product[]
+  documents          Document[]
+  journalEntries     JournalEntry[]
+  connections        IntegrationConnection[]
+  auditLogs          AuditLog[]
+
+  @@map("companies")
+}
+
+model CompanyUser {
+  id          String    @id @default(uuid())
+  companyId   String
+  userId      String
+  role        UserRole  @default(ACCOUNTANT)
+  permissions Json      @default("[]")
+  isActive    Boolean   @default(true)
+  joinedAt    DateTime  @default(now())
+
+  company     Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, userId])
+  @@map("company_users")
+}
+
+model EriCertificate {
+  id                   String    @id @default(uuid())
+  companyId            String
+  userId               String?
+  tin                  String
+  pinfl                String?
+  serialNumber         String
+  ownerName            String
+  companyName          String?
+  validFrom            DateTime
+  validTo              DateTime
+  publicKeyFingerprint String?
+  status               String    @default("VALID")
+  createdAt            DateTime  @default(now())
+
+  company              Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user                 User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@map("eri_certificates")
+}
+
+model Counterparty {
+  id             String         @id @default(uuid())
+  companyId      String
+  tin            String
+  pinfl          String?
+  name           String
+  directorName   String?
+  address        String?
+  phone          String?
+  email          String?
+  bankAccount    String?
+  bankMfo        String?
+  bankName       String?
+  vatPayer       Boolean        @default(false)
+  type           String         @default("BOTH") // CUSTOMER, SUPPLIER, BOTH
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  company        Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  contracts      Contract[]
+  documents      Document[]
+  journalLines   JournalEntryLine[]
+
+  @@unique([companyId, tin])
+  @@map("counterparties")
+}
+
+model Contract {
+  id             String         @id @default(uuid())
+  companyId      String
+  counterpartyId String
+  contractNumber String
+  contractDate   DateTime
+  expiryDate     DateTime?
+  amount         Decimal        @default(0.00) @db.Decimal(18, 2)
+  currency       String         @default("UZS")
+  status         String         @default("ACTIVE")
+  details        Json           @default("{}")
+  createdAt      DateTime       @default(now())
+
+  company        Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  counterparty   Counterparty   @relation(fields: [counterpartyId], references: [id], onDelete: Cascade)
+  documents      Document[]
+
+  @@map("contracts")
+}
+
+model Product {
+  id             String         @id @default(uuid())
+  companyId      String
+  ikpuCode       String         // MXIK kodi (17 xonali)
+  packageCode    String?
+  name           String
+  unitCode       String
+  unitName       String?
+  barcode        String?
+  vatRate        Decimal        @default(12.00) @db.Decimal(5, 2)
+  costPrice      Decimal        @default(0.00) @db.Decimal(18, 2)
+  sellingPrice   Decimal        @default(0.00) @db.Decimal(18, 2)
+  stockQuantity  Decimal        @default(0.000) @db.Decimal(15, 3)
+  isService      Boolean        @default(false)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  company        Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  documentItems  DocumentItem[]
+  journalLines   JournalEntryLine[]
+
+  @@map("products")
+}
+
+model Document {
+  id               String          @id @default(uuid())
+  companyId        String
+  docType          DocumentType    @default(FACTURA)
+  docNumber        String
+  docDate          DateTime
+  contractId       String?
+  counterpartyId   String
+  totalWithoutVat  Decimal         @default(0.00) @db.Decimal(18, 2)
+  totalVat         Decimal         @default(0.00) @db.Decimal(18, 2)
+  totalAmount      Decimal         @default(0.00) @db.Decimal(18, 2)
+  currency         String          @default("UZS")
+  direction        String          @default("OUTGOING") // OUTGOING, INCOMING
+  status           DocumentStatus  @default(DRAFT)
+  externalDidoxId  String?
+  externalSoliqId  String?
+  rawPayload       Json            @default("{}")
+  rejectReason     String?
+  createdById      String?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  company          Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  counterparty     Counterparty    @relation(fields: [counterpartyId], references: [id], onDelete: Restrict)
+  contract         Contract?       @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  createdBy        User?           @relation("DocumentCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  items            DocumentItem[]
+  signatures       Signature[]
+  journalEntries   JournalEntry[]
+
+  @@map("documents")
+}
+
+model DocumentItem {
+  id           String    @id @default(uuid())
+  documentId   String
+  productId    String?
+  ikpuCode     String
+  packageCode  String?
+  name         String
+  quantity     Decimal   @default(1.000) @db.Decimal(15, 3)
+  unitCode     String
+  price        Decimal   @default(0.00) @db.Decimal(18, 2)
+  totalPrice   Decimal   @default(0.00) @db.Decimal(18, 2)
+  vatRate      Decimal   @default(12.00) @db.Decimal(5, 2)
+  vatAmount    Decimal   @default(0.00) @db.Decimal(18, 2)
+  finalAmount  Decimal   @default(0.00) @db.Decimal(18, 2)
+
+  document     Document  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  product      Product?  @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@map("document_items")
+}
+
+model Signature {
+  id                 String    @id @default(uuid())
+  documentId         String
+  userId             String?
+  certificateSerial  String
+  signerTin          String
+  signerName         String
+  signerRole         String?
+  pkcs7Signature     String    // Base64 detached signature
+  signedAt           DateTime  @default(now())
+  ipAddress          String?
+  verificationStatus String    @default("VERIFIED")
+
+  document           Document  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user               User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@map("signatures")
+}
+
+model ChartOfAccount {
+  code        String   @id // '5110', '6010', '4010', '2910'
+  name        String
+  type        String   // ASSET, LIABILITY, EQUITY, REVENUE, EXPENSE
+  isActive    Boolean  @default(true)
+
+  debitLines  JournalEntryLine[] @relation("DebitLines")
+  creditLines JournalEntryLine[] @relation("CreditLines")
+
+  @@map("accounting_chart_of_accounts")
+}
+
+model JournalEntry {
+  id          String             @id @default(uuid())
+  companyId   String
+  documentId  String?
+  entryNumber String
+  entryDate   DateTime
+  description String?
+  createdById String?
+  createdAt   DateTime           @default(now())
+
+  company     Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  document    Document?          @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  createdBy   User?              @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  lines       JournalEntryLine[]
+
+  @@map("journal_entries")
+}
+
+model JournalEntryLine {
+  id              String         @id @default(uuid())
+  journalEntryId  String
+  debitAccount    String
+  creditAccount   String
+  amount          Decimal        @db.Decimal(18, 2)
+  currency        String         @default("UZS")
+  counterpartyId  String?
+  productId       String?
+  comment         String?
+
+  journalEntry    JournalEntry   @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  debitRef        ChartOfAccount @relation("DebitLines", fields: [debitAccount], references: [code])
+  creditRef       ChartOfAccount @relation("CreditLines", fields: [creditAccount], references: [code])
+  counterparty    Counterparty?  @relation(fields: [counterpartyId], references: [id], onDelete: SetNull)
+  product         Product?       @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@map("journal_entry_lines")
+}
+
+model IntegrationConnection {
+  id              String              @id @default(uuid())
+  companyId       String
+  provider        IntegrationProvider
+  apiKey          String?
+  accessToken     String?
+  refreshToken    String?
+  tokenExpiresAt  DateTime?
+  status          String              @default("DISCONNECTED") // CONNECTED, DISCONNECTED, ERROR
+  lastSyncedAt    DateTime?
+  errorMessage    String?
+  config          Json                @default("{}")
+
+  company         Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, provider])
+  @@map("integration_connections")
+}
+
+model AuditLog {
+  id          BigInt    @id @default(autoincrement())
+  companyId   String?
+  userId      String?
+  action      String
+  entityName  String
+  entityId    String?
+  oldData     Json?
+  newData     Json?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime  @default(now())
+
+  company     Company?  @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  user        User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@map("audit_logs")
+}

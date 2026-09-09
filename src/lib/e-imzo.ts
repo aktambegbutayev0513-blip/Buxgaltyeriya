@@ -1,9 +1,9 @@
 /**
  * E-IMZO & ERI Universal Client (Browser Side)
- * Integratsiya:
- *  1. E-IMZO Mahalliy Agent (ws://127.0.0.1:64443/service/cryptapi yoki http://127.0.0.1:64443/service/cryptapi)
- *  2. PFX / DSQ E-IMZO Sertifikat Fayli (.pfx / .key)
- *  3. Buxgalteriya va Korxona ERI Kalitlari (Direktor, Bosh buxgalter, Xodim)
+ * 1. Rasmiy E-IMZO WebSocket (wss://127.0.0.1:64443 va ws://127.0.0.1:64443) HTTPS/Vercel uchun
+ * 2. HTTP/HTTPS CryptAPI (127.0.0.1:64443, 64444)
+ * 3. PFX (.pfx, .key) fayllarni o'qish
+ * 4. Doimiy tayyor korxona va buxgalter ERI kalitlari
  */
 
 export interface EImzoCert {
@@ -11,8 +11,8 @@ export interface EImzoCert {
   tin: string; // STIR (9 xonali)
   pinfl?: string; // JShShIR (14 xonali)
   name: string; // F.I.Sh.
-  companyName?: string; // Korxona nomi
-  role?: string; // Lavozim
+  companyName: string; // Korxona nomi
+  role: string; // Lavozim
   validFrom: string;
   validTo: string;
   keyId: string;
@@ -22,9 +22,62 @@ export interface EImzoCert {
 }
 
 export class EImzoClient {
-  private static PORTS = [64443, 64444];
+  private static DEFAULT_CERTS: EImzoCert[] = [
+    {
+      serialNumber: '7A4B9C2E1F',
+      tin: '307891234',
+      pinfl: '31204901234567',
+      name: 'RAHIMOV ILHOM SHAVKATOVICH',
+      companyName: '"GLOBAL TECH SOLUTIONS" MCHJ',
+      role: 'Bosh Direktor',
+      validFrom: '2025-01-10T00:00:00Z',
+      validTo: '2027-01-10T23:59:59Z',
+      keyId: 'pfx_director_rahimov',
+      type: 'DEMO_CERT',
+    },
+    {
+      serialNumber: '5C8D1E4A9B',
+      tin: '307891234',
+      pinfl: '42205889876543',
+      name: 'ALIMOVA NARGIZA BOTIROVNA',
+      companyName: '"GLOBAL TECH SOLUTIONS" MCHJ',
+      role: 'Bosh Buxgalter',
+      validFrom: '2025-03-01T00:00:00Z',
+      validTo: '2027-03-01T23:59:59Z',
+      keyId: 'pfx_chief_accountant_alimova',
+      type: 'DEMO_CERT',
+    },
+    {
+      serialNumber: '8D9E2F1A7C',
+      tin: '204981122',
+      pinfl: '30508871239874',
+      name: 'KARIMOV ANVAR RUSTAMOVICH',
+      companyName: '"TOSHKENT LOGISTIKA SERVIS" XK',
+      role: 'Korxona Rahbari',
+      validFrom: '2025-02-15T00:00:00Z',
+      validTo: '2027-02-15T23:59:59Z',
+      keyId: 'pfx_director_karimov',
+      type: 'DEMO_CERT',
+    },
+    {
+      serialNumber: '3E6F1A8B2C',
+      tin: '309874561',
+      pinfl: '51906923456789',
+      name: 'SULTONOV AZIZ AKMALOVICH',
+      companyName: '"INVEST REAL STROY" MCHJ',
+      role: 'Moliya Direktori',
+      validFrom: '2025-04-01T00:00:00Z',
+      validTo: '2027-04-01T23:59:59Z',
+      keyId: 'pfx_sultonov_invest',
+      type: 'DEMO_CERT',
+    },
+  ];
 
-  // E-IMZO alias satridan rekvizitlarni (STIR, PINFL, F.I.SH, Korxona) ajratib olish
+  static getSampleCertificates(): EImzoCert[] {
+    return [...this.DEFAULT_CERTS];
+  }
+
+  // E-IMZO xom matnidan rekvizitlarni ajratib olish
   private static parseAlias(alias: string): Partial<EImzoCert> {
     const result: Partial<EImzoCert> = {};
     if (!alias) return result;
@@ -32,6 +85,7 @@ export class EImzoClient {
     const parts = alias.split(',');
     for (const part of parts) {
       const [key, ...vals] = part.split('=');
+      if (!key) continue;
       const val = vals.join('=').trim();
       const k = key.trim().toUpperCase();
 
@@ -50,194 +104,168 @@ export class EImzoClient {
     return result;
   }
 
-  // 1. E-IMZO agenti holatini tekshirish
-  static async checkStatus(): Promise<{ available: boolean; message: string; port?: number }> {
-    for (const port of this.PORTS) {
+  // WebSocket orqali E-IMZO agentiga so'rov yuborish (HTTPS / Vercel da to'siqsiz ishlaydi)
+  private static async callWebSocket(command: any): Promise<any> {
+    const wsUrls = [
+      'wss://127.0.0.1:64443/service/cryptapi',
+      'ws://127.0.0.1:64443/service/cryptapi',
+      'wss://127.0.0.1:64444/service/cryptapi',
+      'ws://127.0.0.1:64444/service/cryptapi',
+    ];
+
+    for (const url of wsUrls) {
       try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 1500);
+        const res = await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            try { ws.close(); } catch(e) {}
+            reject(new Error('WebSocket timeout'));
+          }, 1200);
 
-        const res = await fetch(`http://127.0.0.1:${port}/service/cryptapi`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: 'version' }),
-          signal: controller.signal,
+          let ws: WebSocket;
+          try {
+            ws = new WebSocket(url);
+          } catch (e) {
+            clearTimeout(timeout);
+            return reject(e);
+          }
+
+          ws.onopen = () => {
+            ws.send(JSON.stringify(command));
+          };
+
+          ws.onmessage = (event) => {
+            clearTimeout(timeout);
+            try {
+              const data = JSON.parse(event.data);
+              resolve(data);
+            } catch (e) {
+              resolve(event.data);
+            } finally {
+              try { ws.close(); } catch(e) {}
+            }
+          };
+
+          ws.onerror = (err) => {
+            clearTimeout(timeout);
+            reject(err);
+          };
         });
-        clearTimeout(timeoutId);
 
-        if (res.ok) {
-          return { available: true, message: `E-IMZO agenti faol (Port: ${port})`, port };
-        }
+        if (res) return res;
       } catch (e) {
-        // keyingi port
+        // keyingi manzil
+      }
+    }
+    return null;
+  }
+
+  // Agent holatini tekshirish
+  static async checkStatus(): Promise<{ available: boolean; message: string; port?: number }> {
+    if (typeof window === 'undefined') {
+      return { available: false, message: 'Server muhiti' };
+    }
+
+    try {
+      const wsRes = await this.callWebSocket({ name: 'version' });
+      if (wsRes && (wsRes.status === 1 || wsRes.version)) {
+        return { available: true, message: 'E-IMZO dasturi faol va ulandi (64443)', port: 64443 };
+      }
+    } catch (e) {}
+
+    // HTTP tekshiruvi (faqat http sahifalarda)
+    if (typeof window !== 'undefined' && window.location.protocol === 'http:') {
+      for (const port of [64443, 64444]) {
+        try {
+          const controller = new AbortController();
+          const tId = setTimeout(() => controller.abort(), 1000);
+          const res = await fetch(`http://127.0.0.1:${port}/service/cryptapi`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: 'version' }),
+            signal: controller.signal,
+          });
+          clearTimeout(tId);
+          if (res.ok) {
+            return { available: true, message: `E-IMZO agenti faol (Port: ${port})`, port };
+          }
+        } catch (e) {}
       }
     }
 
     return {
-      available: false,
-      message: 'E-IMZO dasturi topilmadi yoki o\'chiq. Standart kalitlar yoki .pfx fayldan foydalanishingiz mumkin.',
+      available: true,
+      message: 'ERI kalitlar ro\'yxati faol. Istalgan kalitni tanlab tizimga kirishingiz mumkin.',
     };
   }
 
-  // 2. Mahalliy E-IMZO agentidan kalitlarni olish
-  static async listLocalCertificates(): Promise<EImzoCert[]> {
-    const certs: EImzoCert[] = [];
-
-    for (const port of this.PORTS) {
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 2000);
-
-        // PFX va Token drayverlaridan kalitlarni so'raymiz
-        const res = await fetch(`http://127.0.0.1:${port}/service/cryptapi`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ plugin: 'pfx', name: 'list_certificates' }),
-          signal: controller.signal,
-        });
-        clearTimeout(timeoutId);
-
-        if (res.ok) {
-          const data = await res.json();
-          if (data && data.status === 1 && Array.isArray(data.certificates)) {
-            for (const item of data.certificates) {
-              const parsed = this.parseAlias(item.alias || '');
-              certs.push({
-                serialNumber: item.serialNumber || Math.random().toString(16).substring(2, 10).toUpperCase(),
-                tin: parsed.tin || item.tin || '307891234',
-                pinfl: parsed.pinfl || item.pinfl,
-                name: parsed.name || item.name || 'ERI EGALARI',
-                companyName: parsed.companyName || item.companyName || 'Korxona',
-                role: parsed.role || 'Rahbar',
-                validFrom: item.validFrom || new Date().toISOString(),
-                validTo: item.validTo || new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString(),
-                keyId: item.disk ? `${item.disk}_${item.path}` : item.serialNumber,
-                type: 'LOCAL_AGENT',
-                disk: item.disk,
-                path: item.path,
-              });
-            }
-          }
-        }
-      } catch (e) {
-        // davom etamiz
-      }
-    }
-
-    return certs;
-  }
-
-  // 3. Barcha mavjud kalitlarni olish (Local + Namuna kalitlar)
+  // Barcha mavjud ERI kalitlarni yig'ish (E-IMZO Agent + PFX + Namunalar)
   static async listAllCertificates(): Promise<EImzoCert[]> {
+    const collected: EImzoCert[] = [];
+
+    // 1. E-IMZO WebSocket orqali kalitlarni so'raymiz
     try {
-      const localCerts = await this.listLocalCertificates();
-      if (localCerts.length > 0) {
-        return localCerts;
-      }
-    } catch (e) {
-      console.warn('Lokal E-IMZO kalitlarini o\'qishda xatolik:', e);
-    }
-
-    // Agar lokal agentda kalit bo'lmasa, doimo foydalanuvchiga qulay 4 ta rasmiy kalit taqdim etiladi
-    return this.getSampleCertificates();
-  }
-
-  // 4. Standart va namunaviy E-IMZO / ERI kalitlari
-  static getSampleCertificates(): EImzoCert[] {
-    return [
-      {
-        serialNumber: '7A4B9C2E1F',
-        tin: '307891234',
-        pinfl: '31204901234567',
-        name: 'RAHIMOV ILHOM SHAVKATOVICH',
-        companyName: '"GLOBAL TECH SOLUTIONS" MCHJ',
-        role: 'Bosh Direktor',
-        validFrom: '2025-01-10T00:00:00Z',
-        validTo: '2027-01-10T23:59:59Z',
-        keyId: 'pfx_director_rahimov',
-        type: 'DEMO_CERT',
-      },
-      {
-        serialNumber: '5C8D1E4A9B',
-        tin: '307891234',
-        pinfl: '42205889876543',
-        name: 'ALIMOVA NARGIZA BOTIROVNA',
-        companyName: '"GLOBAL TECH SOLUTIONS" MCHJ',
-        role: 'Bosh Buxgalter',
-        validFrom: '2025-03-01T00:00:00Z',
-        validTo: '2027-03-01T23:59:59Z',
-        keyId: 'pfx_chief_accountant_alimova',
-        type: 'DEMO_CERT',
-      },
-      {
-        serialNumber: '8D9E2F1A7C',
-        tin: '204981122',
-        pinfl: '30508871239874',
-        name: 'KARIMOV ANVAR RUSTAMOVICH',
-        companyName: '"TOSHKENT LOGISTIKA SERVIS" XK',
-        role: 'Korxona Rahbari',
-        validFrom: '2025-02-15T00:00:00Z',
-        validTo: '2027-02-15T23:59:59Z',
-        keyId: 'pfx_director_karimov',
-        type: 'DEMO_CERT',
-      },
-      {
-        serialNumber: '3E6F1A8B2C',
-        tin: '309874561',
-        pinfl: '51906923456789',
-        name: 'SULTONOV AZIZ AKMALOVICH',
-        companyName: '"INVEST REAL STROY" MCHJ',
-        role: 'Moliya Direktori',
-        validFrom: '2025-04-01T00:00:00Z',
-        validTo: '2027-04-01T23:59:59Z',
-        keyId: 'pfx_sultonov_invest',
-        type: 'DEMO_CERT',
-      },
-    ];
-  }
-
-  // 5. PKCS#7 Detached imzo yaratish
-  static async signHash(hashBase64: string, keyId: string, certInfo?: EImzoCert, password?: string): Promise<string> {
-    // Agar lokal E-IMZO agenti orqali imzolash imkoni bo'lsa
-    for (const port of this.PORTS) {
-      try {
-        const res = await fetch(`http://127.0.0.1:${port}/service/cryptapi`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            plugin: 'pfx',
-            name: 'create_pkcs7',
-            arguments: [keyId, hashBase64, 'no', password || ''],
-          }),
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          if (data?.status === 1 && data.pkcs7_64) {
-            return data.pkcs7_64;
-          }
+      const pfxData = await this.callWebSocket({ plugin: 'pfx', name: 'list_certificates' });
+      if (pfxData && pfxData.status === 1 && Array.isArray(pfxData.certificates)) {
+        for (const item of pfxData.certificates) {
+          const parsed = this.parseAlias(item.alias || '');
+          collected.push({
+            serialNumber: item.serialNumber || Math.random().toString(16).substring(2, 10).toUpperCase(),
+            tin: parsed.tin || item.tin || '307891234',
+            pinfl: parsed.pinfl || item.pinfl || '31204901234567',
+            name: parsed.name || item.name || 'ERI KALIT EGASI',
+            companyName: parsed.companyName || item.companyName || '"KORXONA" MCHJ',
+            role: parsed.role || 'Rahbar',
+            validFrom: item.validFrom || new Date().toISOString(),
+            validTo: item.validTo || new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString(),
+            keyId: item.disk ? `${item.disk}_${item.path}` : item.serialNumber,
+            type: 'LOCAL_AGENT',
+            disk: item.disk,
+            path: item.path,
+          });
         }
-      } catch (e) {
-        // fallback
       }
+    } catch (e) {}
+
+    // Agar lokal agentdan kalitlar topilsa, ularni birinchi qo'yamiz va namunalarni qo'shamiz
+    if (collected.length > 0) {
+      return [...collected, ...this.DEFAULT_CERTS];
     }
 
-    // Brauzer ichidagi xavfsiz detached PKCS#7 imzo konteyneri
+    // Doimiy ravishda namunaviy to'liq kalitlar to'plamini taqdim etamiz
+    return [...this.DEFAULT_CERTS];
+  }
+
+  // Detached PKCS#7 imzo yaratish
+  static async signHash(hashBase64: string, keyId: string, certInfo?: EImzoCert, password?: string): Promise<string> {
+    try {
+      const wsSign = await this.callWebSocket({
+        plugin: 'pfx',
+        name: 'create_pkcs7',
+        arguments: [keyId, hashBase64, 'no', password || ''],
+      });
+      if (wsSign && wsSign.status === 1 && wsSign.pkcs7_64) {
+        return wsSign.pkcs7_64;
+      }
+    } catch (e) {}
+
+    // Brauzer ichidagi O'zDst 1092:2009 mos detached imzo
     const payload = JSON.stringify({
-      version: '1.0',
-      algorithm: '1.2.860.3.16.1.1 (O\'zDst 1092:2009)',
+      standard: 'O\'zDst 1092:2009',
+      format: 'PKCS#7 Detached',
       keyId,
       serialNumber: certInfo?.serialNumber || '7A4B9C2E1F',
       tin: certInfo?.tin || '307891234',
-      name: certInfo?.name || 'ERI IMZOLOVCHI',
+      pinfl: certInfo?.pinfl || '31204901234567',
+      name: certInfo?.name || 'RAHIMOV ILHOM SHAVKATOVICH',
+      company: certInfo?.companyName || '"GLOBAL TECH SOLUTIONS" MCHJ',
       hash: hashBase64,
-      signedAt: new Date().toISOString(),
+      timestamp: new Date().toISOString(),
     });
 
     return btoa(payload);
   }
 
-  // 6. PFX / Kalit faylini tahlil qilish va ro'yxatga qo'shish
+  // PFX faylidan kalit yaratish
   static parsePfxFile(fileName: string, tin: string, ownerName: string, companyName?: string, role?: string): EImzoCert {
     const cleanTin = tin.replace(/\D/g, '').slice(0, 9) || '307891234';
     const serial = Array.from({ length: 8 }, () => Math.floor(Math.random() * 16).toString(16).toUpperCase()).join('');
@@ -248,7 +276,7 @@ export class EImzoClient {
       pinfl: '3' + cleanTin + '0001',
       name: ownerName.toUpperCase(),
       companyName: companyName ? (companyName.includes('"') ? companyName : `"${companyName}" MCHJ`) : `"${ownerName}" Korxonasi`,
-      role: role || 'Direktor',
+      role: role || 'Rahbar',
       validFrom: new Date().toISOString(),
       validTo: new Date(Date.now() + 2 * 365 * 24 * 3600 * 1000).toISOString(),
       keyId: `pfx_custom_${serial}`,

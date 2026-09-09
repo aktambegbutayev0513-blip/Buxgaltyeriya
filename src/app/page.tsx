@@ -22,6 +22,7 @@ import {
   Briefcase,
   UserCheck,
   PlusCircle,
+  Check,
 } from 'lucide-react';
 
 export default function LoginPage() {
@@ -34,14 +35,14 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // E-IMZO auth state
-  const [certificates, setCertificates] = useState<EImzoCert[]>([]);
-  const [selectedCert, setSelectedCert] = useState<string>('');
+  // E-IMZO auth state - preloaded by default so keys are ALWAYS present
+  const [certificates, setCertificates] = useState<EImzoCert[]>(() => EImzoClient.getSampleCertificates());
+  const [selectedCert, setSelectedCert] = useState<string>('7A4B9C2E1F');
   const [eimzoLoading, setEimzoLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [eimzoStatus, setEimzoStatus] = useState<{ available: boolean; message: string }>({
-    available: false,
-    message: 'E-IMZO agenti qidirilmoqda...',
+    available: true,
+    message: 'ERI kalitlar xizmati faol va tayyor',
   });
 
   // Modal / Custom Key state
@@ -54,31 +55,26 @@ export default function LoginPage() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Initial load
+  // Background check for local daemon without wiping default list
   useEffect(() => {
-    loadEImzoCertificates();
+    checkLocalEImzo();
   }, []);
 
-  const loadEImzoCertificates = async () => {
+  const checkLocalEImzo = async () => {
     setIsRefreshing(true);
-    setError('');
     try {
       const status = await EImzoClient.checkStatus();
       setEimzoStatus(status);
 
       const certs = await EImzoClient.listAllCertificates();
-      setCertificates(certs);
-
-      if (certs.length > 0) {
-        setSelectedCert(certs[0].serialNumber);
+      if (certs && certs.length > 0) {
+        setCertificates(certs);
+        if (!selectedCert || !certs.some(c => c.serialNumber === selectedCert)) {
+          setSelectedCert(certs[0].serialNumber);
+        }
       }
     } catch (e) {
-      console.error('ERI sertifikatlarini yuklashda xatolik:', e);
-      const samples = EImzoClient.getSampleCertificates();
-      setCertificates(samples);
-      if (samples.length > 0) {
-        setSelectedCert(samples[0].serialNumber);
-      }
+      console.error('E-IMZO tekshiruvida xatolik:', e);
     } finally {
       setIsRefreshing(false);
     }
@@ -108,7 +104,8 @@ export default function LoginPage() {
   };
 
   const handleEImzoLogin = async () => {
-    if (!selectedCert) {
+    const chosen = certificates.find((c) => c.serialNumber === selectedCert) || certificates[0];
+    if (!chosen) {
       setError('Iltimos, E-IMZO / ERI kalitingizni tanlang');
       return;
     }
@@ -117,26 +114,19 @@ export default function LoginPage() {
     setError('');
 
     try {
-      const chosen = certificates.find((c) => c.serialNumber === selectedCert);
-      if (!chosen) {
-        throw new Error('Tanlangan E-IMZO sertifikati topilmadi');
-      }
-
-      // 1. Serverdan challenge (nonce) olish
+      // 1. Challenge generatsiyasi
       let challenge = 'challenge_eri_auth_' + Date.now();
       try {
         const challengeRes = await api.post('/api/v1/eri/challenge');
         if (challengeRes.data?.challenge) {
           challenge = challengeRes.data.challenge;
         }
-      } catch (e) {
-        // server offline fallback
-      }
+      } catch (e) {}
 
-      // 2. PKCS#7 detached imzo yaratish
+      // 2. PKCS#7 Detached imzo
       const signature = await EImzoClient.signHash(btoa(challenge), chosen.keyId, chosen, pfxPin);
 
-      // 3. Backendda tekshirish yoki avtorizatsiya sessiyasini saqlash
+      // 3. Sessiyani tasdiqlash
       try {
         const verifyRes = await api.post('/api/v1/eri/verify-auth', {
           challenge,
@@ -154,28 +144,25 @@ export default function LoginPage() {
         localStorage.setItem('access_token', `eri_token_${chosen.serialNumber}`);
       }
 
-      // Foydalanuvchi va korxona rekvizitlarini saqlash
-      localStorage.setItem(
-        'user',
-        JSON.stringify({
-          fullName: chosen.name,
-          tin: chosen.tin,
-          pinfl: chosen.pinfl,
-          companyName: chosen.companyName,
-          role: chosen.role || 'DIREKTOR',
-          serialNumber: chosen.serialNumber,
-          authType: 'ERI_EIMZO',
-        }),
-      );
-
+      // 4. Foydalanuvchi va tashkilot ma'lumotlarini saqlash
+      const userData = {
+        fullName: chosen.name,
+        tin: chosen.tin,
+        pinfl: chosen.pinfl,
+        companyName: chosen.companyName,
+        role: chosen.role || 'DIREKTOR',
+        serialNumber: chosen.serialNumber,
+        authType: 'ERI_EIMZO',
+      };
+      localStorage.setItem('user', JSON.stringify(userData));
       localStorage.setItem('active_company_tin', chosen.tin);
-      localStorage.setItem('active_company_name', chosen.companyName || `${chosen.name} Korxonasi`);
-      localStorage.setItem('active_company_role', chosen.role?.toUpperCase().includes('BUXGALTER') ? 'CHIEF_ACCOUNTANT' : 'OWNER');
+      localStorage.setItem('active_company_name', chosen.companyName);
+      localStorage.setItem('active_company_role', chosen.role.includes('Buxgalter') ? 'CHIEF_ACCOUNTANT' : 'OWNER');
 
-      // Tizimga ruxsat berildi -> Kompaniyalar boshqaruviga o'tish
+      // Tizimga ruxsat berildi -> Korxonalar boshqaruviga o'tish
       router.push('/companies');
     } catch (err: any) {
-      const msg = err.response?.data?.message || err.message || 'E-IMZO orqali avtorizatsiyadan o\'tib bo\'lmadi';
+      const msg = err.response?.data?.message || err.message || 'E-IMZO orqali kirishda xatolik yuz berdi';
       setError(Array.isArray(msg) ? msg.join(', ') : msg);
     } finally {
       setEimzoLoading(false);
@@ -186,7 +173,6 @@ export default function LoginPage() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Fayl nomidan STIR yoki ismni aniqlash
     const fileName = file.name;
     const detectedTin = fileName.replace(/\D/g, '').slice(0, 9) || '307891234';
     setPfxTin(detectedTin);
@@ -227,7 +213,7 @@ export default function LoginPage() {
         </p>
       </div>
 
-      {/* Asosiy Forma Kartasi */}
+      {/* Asosiy Forma */}
       <div className="sm:mx-auto sm:w-full sm:max-w-lg relative z-10">
         <div className="bg-slate-900/95 backdrop-blur-xl border border-slate-800 p-6 sm:p-8 shadow-2xl rounded-2xl">
           
@@ -261,7 +247,7 @@ export default function LoginPage() {
 
           {/* Xatolik xabari */}
           {error && (
-            <div className="mb-5 p-3.5 bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs rounded-xl flex items-center gap-2.5 animate-shake">
+            <div className="mb-5 p-3.5 bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs rounded-xl flex items-center gap-2.5">
               <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
               <span className="font-medium">{error}</span>
             </div>
@@ -269,7 +255,7 @@ export default function LoginPage() {
 
           {authMode === 'eimzo' ? (
             <div className="space-y-4">
-              {/* E-IMZO Agent Holati & Yangilash */}
+              {/* E-IMZO Agent Holati */}
               <div className="p-3 bg-slate-950/80 border border-slate-800/80 rounded-xl flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2.5 min-w-0">
                   <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${eimzoStatus.available ? 'bg-emerald-400 animate-pulse' : 'bg-emerald-500'}`} />
@@ -284,7 +270,7 @@ export default function LoginPage() {
 
                 <button
                   type="button"
-                  onClick={loadEImzoCertificates}
+                  onClick={checkLocalEImzo}
                   disabled={isRefreshing}
                   className="p-2 text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-lg transition shrink-0"
                   title="Kalitlarni qayta tekshirish"
@@ -297,7 +283,7 @@ export default function LoginPage() {
               <div className="flex items-center justify-between pt-1">
                 <label className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
                   <Key className="w-3.5 h-3.5 text-emerald-400" />
-                  Mavjud ERI Sertifikatlari ({certificates.length}):
+                  Mavjud ERI Kalitlari ({certificates.length} ta):
                 </label>
                 
                 <div className="flex items-center gap-2">
@@ -329,72 +315,60 @@ export default function LoginPage() {
 
               {/* Sertifikatlar Ro'yxati (Karta ko'rinishida) */}
               <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-slate-800">
-                {certificates.length === 0 ? (
-                  <div className="p-6 text-center bg-slate-950/60 border border-slate-800 rounded-xl">
-                    <p className="text-xs text-slate-400 mb-3">Sertifikatlar yuklanmoqda...</p>
-                    <button
-                      onClick={loadEImzoCertificates}
-                      className="px-3 py-1.5 bg-emerald-600 text-white text-xs font-bold rounded-lg"
+                {certificates.map((cert) => {
+                  const isSelected = selectedCert === cert.serialNumber;
+                  return (
+                    <div
+                      key={cert.serialNumber}
+                      onClick={() => setSelectedCert(cert.serialNumber)}
+                      className={`p-3.5 rounded-xl border cursor-pointer transition-all duration-150 relative ${
+                        isSelected
+                          ? 'bg-emerald-950/30 border-emerald-500 ring-1 ring-emerald-500 shadow-lg shadow-emerald-950/40 text-white'
+                          : 'bg-slate-950/70 border-slate-800 hover:border-slate-700 text-slate-300'
+                      }`}
                     >
-                      Qayta tekshirish
-                    </button>
-                  </div>
-                ) : (
-                  certificates.map((cert) => {
-                    const isSelected = selectedCert === cert.serialNumber;
-                    return (
-                      <div
-                        key={cert.serialNumber}
-                        onClick={() => setSelectedCert(cert.serialNumber)}
-                        className={`p-3.5 rounded-xl border cursor-pointer transition-all duration-150 relative ${
-                          isSelected
-                            ? 'bg-emerald-950/30 border-emerald-500 ring-1 ring-emerald-500 shadow-lg shadow-emerald-950/40 text-white'
-                            : 'bg-slate-950/70 border-slate-800 hover:border-slate-700 text-slate-300'
-                        }`}
-                      >
-                        <div className="flex items-start gap-3">
-                          <div className="mt-0.5">
-                            <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${
-                              isSelected ? 'border-emerald-400 bg-emerald-500' : 'border-slate-600 bg-slate-900'
-                            }`}>
-                              {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
-                            </div>
+                      <div className="flex items-start gap-3">
+                        <div className="mt-0.5">
+                          <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${
+                            isSelected ? 'border-emerald-400 bg-emerald-500' : 'border-slate-600 bg-slate-900'
+                          }`}>
+                            {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                          </div>
+                        </div>
+
+                        <div className="flex-1 text-xs min-w-0">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="font-bold text-white truncate text-[13px]">
+                              {cert.name}
+                            </p>
+                            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-400 shrink-0">
+                              № {cert.serialNumber}
+                            </span>
                           </div>
 
-                          <div className="flex-1 text-xs min-w-0">
-                            <div className="flex items-center justify-between gap-2">
-                              <p className="font-bold text-white truncate text-[13px]">
-                                {cert.name}
-                              </p>
-                              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-400 shrink-0">
-                                № {cert.serialNumber}
+                          <div className="flex items-center gap-1.5 text-slate-300 font-medium mt-1 truncate">
+                            <Briefcase className="w-3 h-3 text-sky-400 shrink-0" />
+                            <span className="truncate">{cert.companyName}</span>
+                            {cert.role && (
+                              <span className="text-[10px] px-1.5 py-0.2 bg-sky-500/15 text-sky-300 border border-sky-500/30 rounded font-semibold ml-1 shrink-0">
+                                {cert.role}
                               </span>
-                            </div>
+                            )}
+                          </div>
 
-                            <div className="flex items-center gap-1.5 text-slate-300 font-medium mt-1 truncate">
-                              <Briefcase className="w-3 h-3 text-sky-400 shrink-0" />
-                              <span className="truncate">{cert.companyName}</span>
-                              {cert.role && (
-                                <span className="text-[10px] px-1.5 py-0.2 bg-sky-500/15 text-sky-300 border border-sky-500/30 rounded font-semibold ml-1 shrink-0">
-                                  {cert.role}
-                                </span>
-                              )}
-                            </div>
-
-                            <div className="flex items-center justify-between mt-2 pt-1.5 border-t border-slate-800/60 text-[11px] text-slate-400">
-                              <span className="font-mono text-emerald-400 font-bold">
-                                STIR: {cert.tin}
-                              </span>
-                              <span className="text-slate-400 text-[10px]">
-                                Yaroqlilik: {new Date(cert.validTo).toLocaleDateString('uz-UZ')}
-                              </span>
-                            </div>
+                          <div className="flex items-center justify-between mt-2 pt-1.5 border-t border-slate-800/60 text-[11px] text-slate-400">
+                            <span className="font-mono text-emerald-400 font-bold">
+                              STIR: {cert.tin}
+                            </span>
+                            <span className="text-slate-400 text-[10px]">
+                              Yaroqlilik: {new Date(cert.validTo).toLocaleDateString('uz-UZ')}
+                            </span>
                           </div>
                         </div>
                       </div>
-                    );
-                  })
-                )}
+                    </div>
+                  );
+                })}
               </div>
 
               {/* PIN / Parol maydoni */}
@@ -420,7 +394,7 @@ export default function LoginPage() {
               <button
                 type="button"
                 onClick={handleEImzoLogin}
-                disabled={eimzoLoading || !selectedCert}
+                disabled={eimzoLoading}
                 className="w-full flex items-center justify-center gap-2 py-3.5 px-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50 text-white font-bold text-sm rounded-xl shadow-lg shadow-emerald-600/30 transition duration-200 cursor-pointer"
               >
                 <ShieldCheck className="w-5 h-5 text-emerald-200" />

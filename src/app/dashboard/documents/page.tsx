@@ -120,13 +120,31 @@ export default function DocumentsListPage() {
           </p>
         </div>
 
-        <Link
-          href="/dashboard/documents/new"
-          className="flex items-center gap-2 px-4 py-2.5 bg-sky-500 hover:bg-sky-600 text-white text-xs font-bold rounded-xl shadow-lg shadow-sky-500/20 transition self-start sm:self-auto"
-        >
-          <Plus className="w-4 h-4" />
-          Yangi Hisob-faktura
-        </Link>
+        <div className="flex items-center gap-2.5 self-start sm:self-auto">
+          <button
+            onClick={async () => {
+              try {
+                const res = await fetch('/api/v1/integrations/soliq/sync', { method: 'POST', body: JSON.stringify({}) });
+                if (res.ok) {
+                  alert('my3.soliq.uz portali bilan barcha elektron fakturalar muvaffaqiyatli sinxronlashtirildi!');
+                  loadDocuments();
+                }
+              } catch (e) {}
+            }}
+            className="flex items-center gap-2 px-3.5 py-2.5 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 text-xs font-bold rounded-xl transition"
+          >
+            <ShieldCheck className="w-4 h-4 text-indigo-400" />
+            my3.soliq.uz dan yangilash
+          </button>
+
+          <Link
+            href="/dashboard/documents/new"
+            className="flex items-center gap-2 px-4 py-2.5 bg-sky-500 hover:bg-sky-600 text-white text-xs font-bold rounded-xl shadow-lg shadow-sky-500/20 transition"
+          >
+            <Plus className="w-4 h-4" />
+            Yangi Hisob-faktura
+          </Link>
+        </div>
       </div>
 
       {/* Filter Tabs & Search */}

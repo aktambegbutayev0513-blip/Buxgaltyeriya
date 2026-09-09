@@ -19,11 +19,14 @@ import {
   CheckCircle2,
   Download,
   AlertCircle,
+  Briefcase,
+  UserCheck,
+  PlusCircle,
 } from 'lucide-react';
 
 export default function LoginPage() {
   const router = useRouter();
-  const [authMode, setAuthMode] = useState<'password' | 'eimzo'>('eimzo'); // E-IMZO standart birinchi tab
+  const [authMode, setAuthMode] = useState<'eimzo' | 'password'>('eimzo');
   
   // Password auth state
   const [phone, setPhone] = useState('+998901234567');
@@ -35,44 +38,49 @@ export default function LoginPage() {
   const [certificates, setCertificates] = useState<EImzoCert[]>([]);
   const [selectedCert, setSelectedCert] = useState<string>('');
   const [eimzoLoading, setEimzoLoading] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [eimzoStatus, setEimzoStatus] = useState<{ available: boolean; message: string }>({
     available: false,
-    message: 'Tekshirilmoqda...',
+    message: 'E-IMZO agenti qidirilmoqda...',
   });
+
+  // Modal / Custom Key state
   const [pfxPin, setPfxPin] = useState('');
   const [showPfxUploadModal, setShowPfxUploadModal] = useState(false);
-  const [pfxTin, setPfxTin] = useState('');
-  const [pfxOwnerName, setPfxOwnerName] = useState('');
-  const [pfxCompanyName, setPfxCompanyName] = useState('');
+  const [pfxTin, setPfxTin] = useState('307123456');
+  const [pfxOwnerName, setPfxOwnerName] = useState('BERDIYEV RUSTAM OTABOYEVICH');
+  const [pfxCompanyName, setPfxCompanyName] = useState('YANGI BIZNES MCHJ');
+  const [pfxRole, setPfxRole] = useState('Bosh Direktor');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Initial load
   useEffect(() => {
     loadEImzoCertificates();
   }, []);
 
   const loadEImzoCertificates = async () => {
+    setIsRefreshing(true);
+    setError('');
     try {
       const status = await EImzoClient.checkStatus();
       setEimzoStatus(status);
 
-      // Lokal agentdan qidiramiz
-      let certs = await EImzoClient.listAllCertificates();
-
-      // Agar lokal agentda bo'sh bo'lsa yoki ulanmagan bo'lsa, zudlik bilan foydalanish uchun rasmiy namuna kalitlarni taqdim etamiz
-      if (certs.length === 0) {
-        certs = EImzoClient.getSampleCertificates();
-      }
-
+      const certs = await EImzoClient.listAllCertificates();
       setCertificates(certs);
+
       if (certs.length > 0) {
         setSelectedCert(certs[0].serialNumber);
       }
     } catch (e) {
       console.error('ERI sertifikatlarini yuklashda xatolik:', e);
-      const sample = EImzoClient.getSampleCertificates();
-      setCertificates(sample);
-      if (sample.length > 0) setSelectedCert(sample[0].serialNumber);
+      const samples = EImzoClient.getSampleCertificates();
+      setCertificates(samples);
+      if (samples.length > 0) {
+        setSelectedCert(samples[0].serialNumber);
+      }
+    } finally {
+      setIsRefreshing(false);
     }
   };
 
@@ -111,7 +119,7 @@ export default function LoginPage() {
     try {
       const chosen = certificates.find((c) => c.serialNumber === selectedCert);
       if (!chosen) {
-        throw new Error('Tanlangan sertifikat topilmadi');
+        throw new Error('Tanlangan E-IMZO sertifikati topilmadi');
       }
 
       // 1. Serverdan challenge (nonce) olish
@@ -122,11 +130,11 @@ export default function LoginPage() {
           challenge = challengeRes.data.challenge;
         }
       } catch (e) {
-        // offline challenge fallback
+        // server offline fallback
       }
 
       // 2. PKCS#7 detached imzo yaratish
-      const signature = await EImzoClient.signHash(btoa(challenge), chosen.keyId, chosen);
+      const signature = await EImzoClient.signHash(btoa(challenge), chosen.keyId, chosen, pfxPin);
 
       // 3. Backendda tekshirish yoki avtorizatsiya sessiyasini saqlash
       try {
@@ -146,24 +154,25 @@ export default function LoginPage() {
         localStorage.setItem('access_token', `eri_token_${chosen.serialNumber}`);
       }
 
-      // Foydalanuvchi ma'lumotlarini profilga saqlash
+      // Foydalanuvchi va korxona rekvizitlarini saqlash
       localStorage.setItem(
         'user',
         JSON.stringify({
           fullName: chosen.name,
           tin: chosen.tin,
+          pinfl: chosen.pinfl,
           companyName: chosen.companyName,
+          role: chosen.role || 'DIREKTOR',
           serialNumber: chosen.serialNumber,
           authType: 'ERI_EIMZO',
         }),
       );
 
-      // Kompaniya rekvizitlarini avtomatik biriktirish
       localStorage.setItem('active_company_tin', chosen.tin);
       localStorage.setItem('active_company_name', chosen.companyName || `${chosen.name} Korxonasi`);
-      localStorage.setItem('active_company_role', 'DIRECTOR');
+      localStorage.setItem('active_company_role', chosen.role?.toUpperCase().includes('BUXGALTER') ? 'CHIEF_ACCOUNTANT' : 'OWNER');
 
-      // Tizimga ruxsat berildi -> Kompaniyalar portaliga o'tish
+      // Tizimga ruxsat berildi -> Kompaniyalar boshqaruviga o'tish
       router.push('/companies');
     } catch (err: any) {
       const msg = err.response?.data?.message || err.message || 'E-IMZO orqali avtorizatsiyadan o\'tib bo\'lmadi';
@@ -192,40 +201,44 @@ export default function LoginPage() {
       return;
     }
 
-    const newCert = EImzoClient.parsePfxFile('custom.pfx', pfxTin, pfxOwnerName, pfxCompanyName);
+    const newCert = EImzoClient.parsePfxFile('custom.pfx', pfxTin, pfxOwnerName, pfxCompanyName, pfxRole);
     setCertificates([newCert, ...certificates]);
     setSelectedCert(newCert.serialNumber);
     setShowPfxUploadModal(false);
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 flex flex-col justify-center py-12 sm:px-6 lg:px-8 relative overflow-hidden">
-      {/* Orqa fon bezagi */}
-      <div className="absolute inset-0 bg-gradient-to-tr from-sky-950 via-slate-950 to-indigo-950 opacity-90" />
-      <div className="absolute -top-40 -right-40 w-96 h-96 bg-sky-500 rounded-full blur-[140px] opacity-20 pointer-events-none" />
-      <div className="absolute -bottom-40 -left-40 w-96 h-96 bg-emerald-600 rounded-full blur-[140px] opacity-20 pointer-events-none" />
+    <div className="min-h-screen bg-slate-950 flex flex-col justify-center py-10 px-4 sm:px-6 lg:px-8 relative overflow-hidden font-sans">
+      {/* Orqa fon bezaklari */}
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_80%_at_50%_-20%,rgba(14,165,233,0.15),rgba(255,255,255,0))]" />
+      <div className="absolute -top-32 -right-32 w-96 h-96 bg-sky-600/20 rounded-full blur-[120px] pointer-events-none" />
+      <div className="absolute -bottom-32 -left-32 w-96 h-96 bg-emerald-600/20 rounded-full blur-[120px] pointer-events-none" />
 
-      <div className="sm:mx-auto sm:w-full sm:max-w-md relative z-10 text-center">
-        <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-sky-500/10 border border-sky-500/20 text-sky-400 mb-4 shadow-xl shadow-sky-500/10">
+      {/* Header */}
+      <div className="sm:mx-auto sm:w-full sm:max-w-md relative z-10 text-center mb-6">
+        <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-sky-500/10 border border-sky-500/30 text-sky-400 mb-4 shadow-xl shadow-sky-500/10 backdrop-blur-md">
           <Building2 className="w-8 h-8" />
         </div>
-        <h2 className="text-3xl font-extrabold text-white tracking-tight">
+        <h1 className="text-3xl font-black text-white tracking-tight">
           Yagona Buxgalteriya
-        </h2>
-        <p className="mt-2 text-sm text-slate-400">
+        </h1>
+        <p className="mt-1.5 text-sm text-slate-400">
           O'zbekiston korxonalari uchun E-IMZO va ERI kaliti orqali kirish
         </p>
       </div>
 
-      <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-lg relative z-10">
-        <div className="bg-slate-900/90 backdrop-blur-xl border border-slate-800 py-8 px-6 shadow-2xl rounded-2xl sm:px-10">
-          {/* Auth Tablar */}
-          <div className="grid grid-cols-2 gap-2 p-1 bg-slate-950/80 rounded-xl mb-6 border border-slate-800">
+      {/* Asosiy Forma Kartasi */}
+      <div className="sm:mx-auto sm:w-full sm:max-w-lg relative z-10">
+        <div className="bg-slate-900/95 backdrop-blur-xl border border-slate-800 p-6 sm:p-8 shadow-2xl rounded-2xl">
+          
+          {/* Kirish turlari (Tabs) */}
+          <div className="grid grid-cols-2 gap-2 p-1 bg-slate-950/90 rounded-xl mb-6 border border-slate-800">
             <button
+              type="button"
               onClick={() => setAuthMode('eimzo')}
               className={`py-2.5 px-3 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-2 ${
                 authMode === 'eimzo'
-                  ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/25'
+                  ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/30 ring-1 ring-emerald-400/40'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
@@ -233,6 +246,7 @@ export default function LoginPage() {
               E-IMZO / ERI Kalit
             </button>
             <button
+              type="button"
               onClick={() => setAuthMode('password')}
               className={`py-2.5 px-3 text-xs font-semibold rounded-lg transition-all flex items-center justify-center gap-2 ${
                 authMode === 'password'
@@ -245,51 +259,63 @@ export default function LoginPage() {
             </button>
           </div>
 
+          {/* Xatolik xabari */}
           {error && (
-            <div className="mb-4 p-3 bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs rounded-xl flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              <span>{error}</span>
+            <div className="mb-5 p-3.5 bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs rounded-xl flex items-center gap-2.5 animate-shake">
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+              <span className="font-medium">{error}</span>
             </div>
           )}
 
           {authMode === 'eimzo' ? (
             <div className="space-y-4">
-              {/* E-IMZO Agent Holati */}
-              <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-xl flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <div className={`w-2.5 h-2.5 rounded-full ${eimzoStatus.available ? 'bg-emerald-400 animate-pulse' : 'bg-sky-400'}`} />
-                  <div>
-                    <p className="text-xs font-bold text-white flex items-center gap-1.5">
-                      <Cpu className="w-3.5 h-3.5 text-sky-400" />
+              {/* E-IMZO Agent Holati & Yangilash */}
+              <div className="p-3 bg-slate-950/80 border border-slate-800/80 rounded-xl flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${eimzoStatus.available ? 'bg-emerald-400 animate-pulse' : 'bg-emerald-500'}`} />
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-white flex items-center gap-1.5 truncate">
+                      <Cpu className="w-3.5 h-3.5 text-sky-400 shrink-0" />
                       E-IMZO Kriptografik Xizmati
                     </p>
-                    <p className="text-[11px] text-slate-400">{eimzoStatus.message}</p>
+                    <p className="text-[11px] text-slate-400 truncate">{eimzoStatus.message}</p>
                   </div>
                 </div>
 
                 <button
                   type="button"
                   onClick={loadEImzoCertificates}
-                  className="p-1.5 text-slate-400 hover:text-white bg-slate-800 rounded-lg transition"
-                  title="Qayta tekshirish"
+                  disabled={isRefreshing}
+                  className="p-2 text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-lg transition shrink-0"
+                  title="Kalitlarni qayta tekshirish"
                 >
-                  <RefreshCw className="w-3.5 h-3.5" />
+                  <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-sky-400' : ''}`} />
                 </button>
               </div>
 
-              {/* Sertifikatlar Ro'yxati */}
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label className="text-xs font-bold text-slate-200">
-                    ERI Sertifikatingizni tanlang:
-                  </label>
+              {/* Kalitlar sarlavhasi va qo'shimcha tugmalar */}
+              <div className="flex items-center justify-between pt-1">
+                <label className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                  <Key className="w-3.5 h-3.5 text-emerald-400" />
+                  Mavjud ERI Sertifikatlari ({certificates.length}):
+                </label>
+                
+                <div className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    className="text-[11px] text-sky-400 hover:text-sky-300 font-semibold flex items-center gap-1"
+                    className="text-[11px] text-sky-400 hover:text-sky-300 font-semibold flex items-center gap-1 bg-sky-500/10 px-2 py-1 rounded-lg border border-sky-500/20 hover:border-sky-500/40 transition"
                   >
                     <Upload className="w-3 h-3" />
-                    .pfx fayl yuklash
+                    .pfx yuklash
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowPfxUploadModal(true)}
+                    className="text-[11px] text-emerald-400 hover:text-emerald-300 font-semibold flex items-center gap-1 bg-emerald-500/10 px-2 py-1 rounded-lg border border-emerald-500/20 hover:border-emerald-500/40 transition"
+                  >
+                    <PlusCircle className="w-3 h-3" />
+                    ERI kiritish
                   </button>
                   <input
                     ref={fileInputRef}
@@ -299,49 +325,82 @@ export default function LoginPage() {
                     className="hidden"
                   />
                 </div>
+              </div>
 
-                <div className="space-y-2.5 max-h-64 overflow-y-auto pr-1">
-                  {certificates.map((cert) => (
-                    <label
-                      key={cert.serialNumber}
-                      className={`block p-3.5 rounded-xl border cursor-pointer transition ${
-                        selectedCert === cert.serialNumber
-                          ? 'bg-emerald-500/15 border-emerald-500 text-white shadow-md'
-                          : 'bg-slate-950/60 border-slate-800 text-slate-300 hover:border-slate-700'
-                      }`}
+              {/* Sertifikatlar Ro'yxati (Karta ko'rinishida) */}
+              <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-slate-800">
+                {certificates.length === 0 ? (
+                  <div className="p-6 text-center bg-slate-950/60 border border-slate-800 rounded-xl">
+                    <p className="text-xs text-slate-400 mb-3">Sertifikatlar yuklanmoqda...</p>
+                    <button
+                      onClick={loadEImzoCertificates}
+                      className="px-3 py-1.5 bg-emerald-600 text-white text-xs font-bold rounded-lg"
                     >
-                      <div className="flex items-start gap-3">
-                        <input
-                          type="radio"
-                          name="cert"
-                          value={cert.serialNumber}
-                          checked={selectedCert === cert.serialNumber}
-                          onChange={() => setSelectedCert(cert.serialNumber)}
-                          className="mt-1 text-emerald-500 focus:ring-emerald-500"
-                        />
-                        <div className="text-xs flex-1">
-                          <div className="flex items-center justify-between">
-                            <p className="font-bold text-emerald-400">{cert.name}</p>
-                            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
-                              {cert.serialNumber}
-                            </span>
+                      Qayta tekshirish
+                    </button>
+                  </div>
+                ) : (
+                  certificates.map((cert) => {
+                    const isSelected = selectedCert === cert.serialNumber;
+                    return (
+                      <div
+                        key={cert.serialNumber}
+                        onClick={() => setSelectedCert(cert.serialNumber)}
+                        className={`p-3.5 rounded-xl border cursor-pointer transition-all duration-150 relative ${
+                          isSelected
+                            ? 'bg-emerald-950/30 border-emerald-500 ring-1 ring-emerald-500 shadow-lg shadow-emerald-950/40 text-white'
+                            : 'bg-slate-950/70 border-slate-800 hover:border-slate-700 text-slate-300'
+                        }`}
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className="mt-0.5">
+                            <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${
+                              isSelected ? 'border-emerald-400 bg-emerald-500' : 'border-slate-600 bg-slate-900'
+                            }`}>
+                              {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                            </div>
                           </div>
-                          <p className="text-slate-300 font-medium mt-0.5">{cert.companyName}</p>
-                          <div className="flex items-center gap-3 mt-1.5 text-[10px] text-slate-400">
-                            <span className="font-mono text-sky-400 font-semibold">STIR: {cert.tin}</span>
-                            <span>Muddati: {new Date(cert.validTo).toLocaleDateString('uz-UZ')} gacha</span>
+
+                          <div className="flex-1 text-xs min-w-0">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="font-bold text-white truncate text-[13px]">
+                                {cert.name}
+                              </p>
+                              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-400 shrink-0">
+                                № {cert.serialNumber}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center gap-1.5 text-slate-300 font-medium mt-1 truncate">
+                              <Briefcase className="w-3 h-3 text-sky-400 shrink-0" />
+                              <span className="truncate">{cert.companyName}</span>
+                              {cert.role && (
+                                <span className="text-[10px] px-1.5 py-0.2 bg-sky-500/15 text-sky-300 border border-sky-500/30 rounded font-semibold ml-1 shrink-0">
+                                  {cert.role}
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="flex items-center justify-between mt-2 pt-1.5 border-t border-slate-800/60 text-[11px] text-slate-400">
+                              <span className="font-mono text-emerald-400 font-bold">
+                                STIR: {cert.tin}
+                              </span>
+                              <span className="text-slate-400 text-[10px]">
+                                Yaroqlilik: {new Date(cert.validTo).toLocaleDateString('uz-UZ')}
+                              </span>
+                            </div>
                           </div>
                         </div>
                       </div>
-                    </label>
-                  ))}
-                </div>
+                    );
+                  })
+                )}
               </div>
 
               {/* PIN / Parol maydoni */}
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">
-                  ERI Paroli / PIN kodi (ixtiyoriy)
+              <div className="pt-1">
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  ERI Paroli / PIN kodi (agar mavjud bo'lsa)
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-500">
@@ -351,23 +410,24 @@ export default function LoginPage() {
                     type="password"
                     value={pfxPin}
                     onChange={(e) => setPfxPin(e.target.value)}
-                    className="block w-full pl-10 pr-3 py-2.5 bg-slate-950/70 border border-slate-800 rounded-xl text-white text-sm outline-none focus:border-emerald-500"
-                    placeholder="••••••••"
+                    className="block w-full pl-10 pr-3 py-2.5 bg-slate-950/80 border border-slate-800 rounded-xl text-white text-xs outline-none focus:border-emerald-500 transition"
+                    placeholder="ERI kalit parolini kiriting"
                   />
                 </div>
               </div>
 
               {/* Kirish Tugmasi */}
               <button
+                type="button"
                 onClick={handleEImzoLogin}
                 disabled={eimzoLoading || !selectedCert}
-                className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold rounded-xl shadow-lg shadow-emerald-600/25 transition duration-200"
+                className="w-full flex items-center justify-center gap-2 py-3.5 px-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50 text-white font-bold text-sm rounded-xl shadow-lg shadow-emerald-600/30 transition duration-200 cursor-pointer"
               >
-                <ShieldCheck className="w-5 h-5" />
-                {eimzoLoading ? 'Imzo tasdiqlanmoqda...' : 'E-IMZO bilan tizimga kirish'}
+                <ShieldCheck className="w-5 h-5 text-emerald-200" />
+                {eimzoLoading ? 'E-IMZO tasdiqlanmoqda...' : 'E-IMZO bilan tizimga kirish'}
               </button>
 
-              <div className="pt-2 text-center">
+              <div className="pt-1 text-center">
                 <a
                   href="https://e-imzo.uz"
                   target="_blank"
@@ -375,7 +435,7 @@ export default function LoginPage() {
                   className="text-[11px] text-slate-500 hover:text-sky-400 transition inline-flex items-center gap-1"
                 >
                   <Download className="w-3 h-3" />
-                  E-IMZO dasturini kompyuterga yuklab olish (e-imzo.uz)
+                  E-IMZO dasturini yuklab olish (e-imzo.uz)
                 </a>
               </div>
             </div>
@@ -439,7 +499,7 @@ export default function LoginPage() {
         </div>
 
         {/* Feature Badges */}
-        <div className="mt-8 grid grid-cols-3 gap-2 text-center text-slate-400 text-xs">
+        <div className="mt-6 grid grid-cols-3 gap-2 text-center text-slate-400 text-xs">
           <div className="p-2.5 rounded-xl bg-slate-900/60 border border-slate-800/80">
             <Building2 className="w-4 h-4 text-sky-400 mx-auto mb-1" />
             <span>50+ Kompaniya</span>
@@ -455,17 +515,17 @@ export default function LoginPage() {
         </div>
       </div>
 
-      {/* Modal: PFX ERI Faylini Biriktirish */}
+      {/* Modal: ERI Sertifikatini Kiritish / Qo'shish */}
       {showPfxUploadModal && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center">
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl animate-in fade-in zoom-in duration-150">
+            <div className="flex items-center gap-3 mb-4 pb-3 border-b border-slate-800">
+              <div className="w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center shrink-0">
                 <Key className="w-5 h-5" />
               </div>
               <div>
-                <h3 className="text-base font-bold text-white">ERI Sertifikatini Yuklash</h3>
-                <p className="text-xs text-slate-400">DSQ / E-IMZO kaliti rekvizitlari</p>
+                <h3 className="text-base font-bold text-white">ERI Sertifikatini Biriktirish</h3>
+                <p className="text-xs text-slate-400">DSQ / E-IMZO rekvizitlarini kiriting</p>
               </div>
             </div>
 
@@ -495,7 +555,7 @@ export default function LoginPage() {
                   value={pfxOwnerName}
                   onChange={(e) => setPfxOwnerName(e.target.value)}
                   className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs outline-none focus:border-emerald-500"
-                  placeholder="RAHIMOV ILHOM SHAVKATOVICH"
+                  placeholder="BERDIYEV RUSTAM OTABOYEVICH"
                 />
               </div>
 
@@ -510,6 +570,22 @@ export default function LoginPage() {
                   className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs outline-none focus:border-emerald-500"
                   placeholder='"BARAKA SAVDO" MCHJ'
                 />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Lavozim / Vakolat
+                </label>
+                <select
+                  value={pfxRole}
+                  onChange={(e) => setPfxRole(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs outline-none focus:border-emerald-500"
+                >
+                  <option value="Bosh Direktor">Bosh Direktor</option>
+                  <option value="Bosh Buxgalter">Bosh Buxgalter</option>
+                  <option value="Moliya Direktori">Moliya Direktori</option>
+                  <option value="Hisobchi">Hisobchi</option>
+                </select>
               </div>
 
               <div className="flex gap-3 pt-3">

@@ -24,6 +24,8 @@ import {
   Check,
   AlertCircle,
   Key,
+  Globe,
+  Tag,
 } from 'lucide-react';
 
 interface CompanyItem {
@@ -33,6 +35,8 @@ interface CompanyItem {
   shortName?: string;
   directorName?: string;
   address?: string;
+  oked?: string;
+  okedName?: string;
   status: string;
   userRole: string;
   hasEri: boolean;
@@ -47,16 +51,15 @@ export default function CompaniesPortalPage() {
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
 
-  // New Company form state (barcha soxta ma'lumotlar olib tashlangan)
+  // New Company form state
   const [newTin, setNewTin] = useState('');
   const [newName, setNewName] = useState('');
   const [newDirector, setNewDirector] = useState('');
   const [newAddress, setNewAddress] = useState('');
-  const [newBank, setNewBank] = useState('');
-  const [newMfo, setNewMfo] = useState('');
-  const [newAccount, setNewAccount] = useState('');
+  const [newOked, setNewOked] = useState('');
+  const [newOkedName, setNewOkedName] = useState('');
   const [isLookingUp, setIsLookingUp] = useState(false);
-  const [lookupResult, setLookupResult] = useState<{ found: boolean; message: string } | null>(null);
+  const [lookupResult, setLookupResult] = useState<{ found: boolean; message: string; source?: string } | null>(null);
   const [creating, setCreating] = useState(false);
 
   useEffect(() => {
@@ -66,11 +69,9 @@ export default function CompaniesPortalPage() {
   const loadCompanies = async () => {
     setLoading(true);
     try {
-      // 1. LocalStorage dan foydalanuvchi saqlagan haqiqiy korxonalarni olish
       const savedLocalStr = localStorage.getItem('user_companies_list');
       let localList: CompanyItem[] = savedLocalStr ? JSON.parse(savedLocalStr) : [];
 
-      // 2. Tizimga E-IMZO / Parol bilan kirgan joriy korxona
       const storedTin = localStorage.getItem('active_company_tin');
       const storedName = localStorage.getItem('active_company_name');
       const userStr = localStorage.getItem('user');
@@ -104,7 +105,7 @@ export default function CompaniesPortalPage() {
     }
   };
 
-  // STIR o'zgarganda faqat haqiqiy davlat reestridan qidirish
+  // STIR o'zgarganda Stat.uz (YeGRPO) reestridan avtomatik qidirish
   const handleTinChange = async (val: string) => {
     const clean = val.replace(/\D/g, '').slice(0, 9);
     setNewTin(clean);
@@ -118,20 +119,23 @@ export default function CompaniesPortalPage() {
           setNewName(data.name);
           setNewDirector(data.directorName || '');
           setNewAddress(data.address || '');
+          setNewOked(data.oked || '');
+          setNewOkedName(data.okedName || '');
           setLookupResult({
             found: true,
-            message: 'Davlat reestridan haqiqiy ma\'lumotlar yuklandi',
+            source: data.source || 'Stat.uz (Statistika Agentligi)',
+            message: 'Stat.uz (YeGRPO) reestridan rasmiy ma\'lumotlar yuklandi',
           });
         } else {
           setLookupResult({
             found: false,
-            message: 'Reestrdan avtomat topilmadi. Korxona nomini qo\'lda kiriting.',
+            message: 'Stat.uz reestridan avtomat topilmadi. Korxona nomini kiriting.',
           });
         }
       } catch (err) {
         setLookupResult({
           found: false,
-          message: 'Qidiruvda xatolik. Ma\'lumotlarni qo\'lda kiriting.',
+          message: 'Qidiruvda xatolik. Ma\'lumotlarni kiriting.',
         });
       } finally {
         setIsLookingUp(false);
@@ -151,6 +155,7 @@ export default function CompaniesPortalPage() {
           setNewDirector(u.fullName || '');
           setLookupResult({
             found: true,
+            source: 'ERI / E-IMZO',
             message: 'ERI kalit sertifikatidan haqiqiy rekvizitlar yuklandi',
           });
         }
@@ -196,6 +201,8 @@ export default function CompaniesPortalPage() {
         name: newName.trim(),
         directorName: newDirector.trim(),
         address: newAddress.trim(),
+        oked: newOked.trim(),
+        okedName: newOkedName.trim(),
         status: 'ACTIVE',
         userRole: 'OWNER',
         hasEri: true,
@@ -215,6 +222,8 @@ export default function CompaniesPortalPage() {
       setNewName('');
       setNewDirector('');
       setNewAddress('');
+      setNewOked('');
+      setNewOkedName('');
       setLookupResult(null);
       setSearch('');
 
@@ -274,7 +283,7 @@ export default function CompaniesPortalPage() {
               Boshqaruvdagi Korxonalar
             </h2>
             <p className="text-sm text-slate-400 mt-1">
-              Bitta akkaunt orqali korxonalarni alohida ma'lumotlar bazasi va ERI kaliti bilan boshqaring.
+              Stat.uz (YeGRPO) va ERI kaliti orqali korxonalarni boshqaring.
             </p>
           </div>
 
@@ -311,7 +320,7 @@ export default function CompaniesPortalPage() {
             </h3>
             <p className="text-xs text-slate-400 mb-6">
               {search
-                ? `STIR: ${search} bo'yicha yangi korxonangizni tizimga qo'shishingiz mumkin.`
+                ? `STIR: ${search} bo'yicha Stat.uz ma'lumotlarini yuklab tizimga qo'shishingiz mumkin.`
                 : 'Buxgalteriya hisobini yuritish va elektron hujjatlar bilan ishlash uchun korxonangizni qo\'shing.'}
             </p>
             <button
@@ -350,6 +359,12 @@ export default function CompaniesPortalPage() {
                     <p className="text-[11px] text-slate-500 mt-1 line-clamp-1 flex items-center gap-1">
                       <MapPin className="w-3 h-3 text-slate-600 shrink-0" />
                       {comp.address}
+                    </p>
+                  )}
+                  {comp.oked && (
+                    <p className="text-[10px] text-slate-500 mt-1 line-clamp-1 flex items-center gap-1 font-mono">
+                      <Tag className="w-3 h-3 text-slate-600 shrink-0" />
+                      IFUT (OKED): {comp.oked}
                     </p>
                   )}
 
@@ -395,7 +410,7 @@ export default function CompaniesPortalPage() {
         )}
       </main>
 
-      {/* Modal: Yangi Kompaniya Qo'shish */}
+      {/* Modal: Yangi Kompaniya Qo'shish (Stat.uz Integratsiyasi) */}
       {showAddModal && (
         <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 sm:p-7 shadow-2xl max-h-[90vh] overflow-y-auto">
@@ -406,7 +421,10 @@ export default function CompaniesPortalPage() {
                 </div>
                 <div>
                   <h3 className="text-base font-bold text-white">Yangi Kompaniya Qo'shish</h3>
-                  <p className="text-[11px] text-slate-400">STIR orqali ma'lumotlarni to'ldiring</p>
+                  <p className="text-[11px] text-slate-400 flex items-center gap-1">
+                    <Globe className="w-3 h-3 text-sky-400" />
+                    Stat.uz (YeGRPO) orqali avtomatik to'ldirish
+                  </p>
                 </div>
               </div>
 
@@ -417,12 +435,12 @@ export default function CompaniesPortalPage() {
                 title="ERI kalitidan ma'lumotlarni olish"
               >
                 <Key className="w-3 h-3" />
-                ERI dan yuklash
+                ERI dan olish
               </button>
             </div>
 
             <form onSubmit={handleCreateCompany} className="space-y-4">
-              {/* STIR Kiritish */}
+              {/* STIR Kiritish Maydoni */}
               <div>
                 <label className="block text-xs font-bold text-slate-300 mb-1">
                   STIR (TIN) - 9 xonali son
@@ -435,7 +453,7 @@ export default function CompaniesPortalPage() {
                     value={newTin}
                     onChange={(e) => handleTinChange(e.target.value)}
                     className="w-full pl-3 pr-10 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white text-sm font-mono font-bold outline-none focus:border-sky-500 transition"
-                    placeholder="Masalan: 309889588"
+                    placeholder="Masalan: 309889508"
                   />
                   <div className="absolute right-3 top-1/2 -translate-y-1/2">
                     {isLookingUp ? (
@@ -451,7 +469,7 @@ export default function CompaniesPortalPage() {
                     lookupResult.found ? 'text-emerald-400' : 'text-slate-400'
                   }`}>
                     {lookupResult.found ? <Check className="w-3 h-3" /> : <AlertCircle className="w-3 h-3" />}
-                    {lookupResult.message}
+                    <span>{lookupResult.message}</span>
                   </div>
                 )}
               </div>
@@ -467,7 +485,7 @@ export default function CompaniesPortalPage() {
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                   className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs outline-none focus:border-sky-500"
-                  placeholder='Masalan: "ORIENT SAVDO BIZNES" MCHJ'
+                  placeholder='Stat.uz dan yuklanadi yoki qo\'lda kiriting'
                 />
               </div>
 
@@ -481,23 +499,38 @@ export default function CompaniesPortalPage() {
                   value={newDirector}
                   onChange={(e) => setNewDirector(e.target.value)}
                   className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs outline-none focus:border-sky-500"
-                  placeholder='Masalan: Qodirov Jamshid Anvarovich'
+                  placeholder='Rahbar F.I.Sh.'
                 />
               </div>
 
               {/* Yuridik Manzil */}
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1">
-                  Yuridik Manzil (ixtiyoriy)
+                  Yuridik Manzil (Stat.uz ma'lumotlari)
                 </label>
                 <input
                   type="text"
                   value={newAddress}
                   onChange={(e) => setNewAddress(e.target.value)}
                   className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs outline-none focus:border-sky-500"
-                  placeholder='Toshkent shahri, Chilonzor tumani...'
+                  placeholder='Toshkent shahri...'
                 />
               </div>
+
+              {/* IFUT / OKED */}
+              {newOked && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    IFUT (OKED) Faoliyat turi
+                  </label>
+                  <input
+                    type="text"
+                    readOnly
+                    value={`${newOked} - ${newOkedName}`}
+                    className="w-full px-3 py-2 bg-slate-950/60 border border-slate-800 rounded-xl text-slate-400 text-xs font-mono outline-none"
+                  />
+                </div>
+              )}
 
               <div className="flex gap-3 pt-3 border-t border-slate-800">
                 <button

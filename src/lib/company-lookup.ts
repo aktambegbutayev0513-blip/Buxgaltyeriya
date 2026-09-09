@@ -1,6 +1,6 @@
 /**
- * O'zbekiston Davlat Soliq Qo'mitasi & Davlat Reestri STIR qidiruv xizmati
- * Faqat haqiqiy ma'lumotlar bilan ishlaydi, soxta ma'lumotlar olib tashlangan.
+ * O'zbekiston Respublikasi Prezidenti huzuridagi Statistika Agentligi (Stat.uz)
+ * va Yagona Davlat Korxona va Tashkilotlar Reestri (YeGRPO / USREO) integratsiyasi.
  */
 
 export interface CompanyRegistryInfo {
@@ -12,7 +12,6 @@ export interface CompanyRegistryInfo {
   address?: string;
   oked?: string;
   okedName?: string;
-  vatStatus?: string;
   status?: string;
   source?: string;
 }
@@ -37,17 +36,15 @@ export async function lookupCompanyByTin(tin: string): Promise<CompanyRegistryIn
           address: data.address || '',
           oked: data.oked || '',
           okedName: data.okedName || '',
-          vatStatus: data.vatStatus || 'ACTIVE_VAT',
           status: data.status || 'ACTIVE',
-          source: 'DAVLAT_REESTRI',
+          source: data.source || 'STAT.UZ (YeGRPO)',
         };
       }
     }
   } catch (e) {
-    console.warn('Online STIR qidiruvida xatolik:', e);
+    console.warn('Stat.uz qidiruvida xatolik:', e);
   }
 
-  // Agar online reestrdan topilmasa, soxta ma'lumot bermaymiz
   return {
     found: false,
     tin: cleanTin,
